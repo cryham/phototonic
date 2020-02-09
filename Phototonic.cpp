@@ -3075,7 +3075,40 @@ void Phototonic::renameDir() {
 //--------------------------------------------- CH new
 void Phototonic::renameRate(bool front)
 {
+    QString selectedImageFileName = thumbsViewer->getSingleSelectionFilename();
+    if (selectedImageFileName.isEmpty())
+        return;
+    QFile currentFileFullPath(selectedImageFileName);
+    QFileInfo currentFileInfo(currentFileFullPath);
+    
+    QString newFileName =
+        (front ? "`" + currentFileInfo.baseName() : currentFileInfo.baseName() + "`") + "." + currentFileInfo.suffix();
+    QString newFileNameFullPath = currentFileInfo.absolutePath() + QDir::separator() + newFileName;
 
+    /*MessageBox msgBox(this);
+    msgBox.warning("Test", tr("Test\n%1\n%2\n").arg(currentFileFullPath.fileName()).arg(newFileNameFullPath)
+        .arg(currentFileInfo.absolutePath()));*/
+
+    if (currentFileFullPath.rename(newFileNameFullPath)) {
+        QModelIndexList indexesList = thumbsViewer->selectionModel()->selectedIndexes();
+        thumbsViewer->thumbsViewerModel->item(indexesList.first().row())->setData(newFileNameFullPath,
+                                                                                    thumbsViewer->FileNameRole);
+        thumbsViewer->thumbsViewerModel->item(indexesList.first().row())->setData(newFileName, Qt::DisplayRole);
+
+        imageViewer->setInfo(newFileName);
+        imageViewer->viewerImageFullPath = newFileNameFullPath;
+
+        if (Settings::filesList.contains(currentFileInfo.absoluteFilePath())) {
+            Settings::filesList.replace(Settings::filesList.indexOf(currentFileInfo.absoluteFilePath()),
+                                        newFileNameFullPath);
+        }
+        if (Settings::layoutMode == ImageViewWidget) {
+            thumbsViewer->setImageViewerWindowTitle();
+        }
+    } else {
+        MessageBox msgBox(this);
+        msgBox.critical(tr("Error"), tr("Failed to rename image."));
+    }
 }
 
 void Phototonic::renameFront()
