@@ -190,6 +190,8 @@ void Phototonic::createImageViewer() {
     imageViewer->addAction(deleteAction);
     imageViewer->addAction(deletePermanentlyAction);
     imageViewer->addAction(renameAction);
+    imageViewer->addAction(renameFrontAction);
+    imageViewer->addAction(renameBackAction);
     imageViewer->addAction(CloseImageAction);
     imageViewer->addAction(fullScreenAction);
     imageViewer->addAction(settingsAction);
@@ -273,6 +275,8 @@ void Phototonic::createImageViewer() {
     imageViewer->ImagePopUpMenu->addAction(saveAction);
     imageViewer->ImagePopUpMenu->addAction(saveAsAction);
     imageViewer->ImagePopUpMenu->addAction(renameAction);
+    imageViewer->ImagePopUpMenu->addAction(renameFrontAction);
+    imageViewer->ImagePopUpMenu->addAction(renameBackAction);
     imageViewer->ImagePopUpMenu->addAction(deleteAction);
     imageViewer->ImagePopUpMenu->addAction(deletePermanentlyAction);
     imageViewer->ImagePopUpMenu->addAction(openWithMenuAction);
@@ -392,6 +396,14 @@ void Phototonic::createActions() {
     renameAction = new QAction(tr("Rename"), this);
     renameAction->setObjectName("rename");
     connect(renameAction, SIGNAL(triggered()), this, SLOT(rename()));
+
+    renameFrontAction = new QAction(tr("Rename Front"), this);  /**/
+    renameFrontAction->setObjectName("renameFront");
+    connect(renameFrontAction, SIGNAL(triggered()), this, SLOT(renameFront()));
+
+    renameBackAction = new QAction(tr("Rename Back"), this);
+    renameBackAction->setObjectName("renameBack");
+    connect(renameBackAction, SIGNAL(triggered()), this, SLOT(renameBack()));
 
     removeMetadataAction = new QAction(tr("Remove Metadata"), this);
     removeMetadataAction->setObjectName("removeMetadata");
@@ -704,6 +716,8 @@ void Phototonic::createMenus() {
     editMenu->addAction(moveToAction);
     editMenu->addAction(pasteAction);
     editMenu->addAction(renameAction);
+    editMenu->addAction(renameFrontAction);
+    editMenu->addAction(renameBackAction);
     editMenu->addAction(removeMetadataAction);
     editMenu->addAction(deleteAction);
     editMenu->addAction(deletePermanentlyAction);
@@ -759,6 +773,8 @@ void Phototonic::createMenus() {
     thumbsViewer->addAction(copyToAction);
     thumbsViewer->addAction(moveToAction);
     thumbsViewer->addAction(renameAction);
+    thumbsViewer->addAction(renameFrontAction);
+    thumbsViewer->addAction(renameBackAction);
     thumbsViewer->addAction(removeMetadataAction);
     thumbsViewer->addAction(deleteAction);
     thumbsViewer->addAction(deletePermanentlyAction);
@@ -2220,6 +2236,8 @@ void Phototonic::loadShortcuts() {
     Settings::actionKeys[copyImageAction->objectName()] = copyImageAction;
     Settings::actionKeys[pasteImageAction->objectName()] = pasteImageAction;
     Settings::actionKeys[renameAction->objectName()] = renameAction;
+    Settings::actionKeys[renameFrontAction->objectName()] = renameFrontAction;
+    Settings::actionKeys[renameBackAction->objectName()] = renameBackAction;
     Settings::actionKeys[refreshAction->objectName()] = refreshAction;
     Settings::actionKeys[pasteAction->objectName()] = pasteAction;
     Settings::actionKeys[goBackAction->objectName()] = goBackAction;
@@ -2308,6 +2326,8 @@ void Phototonic::loadShortcuts() {
         copyImageAction->setShortcut(QKeySequence("Ctrl+Shift+C"));
         pasteImageAction->setShortcut(QKeySequence("Ctrl+Shift+V"));
         renameAction->setShortcut(QKeySequence("F2"));
+        renameFrontAction->setShortcut(QKeySequence("F1"));
+        renameBackAction->setShortcut(QKeySequence("F3"));
         refreshAction->setShortcut(QKeySequence("F5"));
         pasteAction->setShortcut(QKeySequence("Ctrl+V"));
         goBackAction->setShortcut(QKeySequence("Alt+Left"));
@@ -3052,6 +3072,22 @@ void Phototonic::renameDir() {
     }
 }
 
+//--------------------------------------------- CH new
+void Phototonic::renameRate(bool front)
+{
+
+}
+
+void Phototonic::renameFront()
+{
+    renameRate(true);
+}
+void Phototonic::renameBack()
+{
+    renameRate(false);
+}
+//--------------------------------------------- 
+
 void Phototonic::rename() {
     if (QApplication::focusWidget() == fileSystemTree) {
         renameDir();
@@ -3344,6 +3380,8 @@ void Phototonic::setInterfaceEnabled(bool enable) {
     // actions
     colorsAction->setEnabled(enable);
     renameAction->setEnabled(enable);
+    renameFrontAction->setEnabled(enable);
+    renameBackAction->setEnabled(enable);
     removeMetadataAction->setEnabled(enable);
     cropAction->setEnabled(enable);
     resizeAction->setEnabled(enable);

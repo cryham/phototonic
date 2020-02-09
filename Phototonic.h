@@ -31,7 +31,7 @@
 #include "FileSystemTree.h"
 #include <QStackedLayout>
 
-#define VERSION "Phototonic v2.1"
+#define VERSION "Phototonic v2.1 cryham mod"
 
 class Phototonic : public QMainWindow {
 Q_OBJECT
@@ -101,6 +101,10 @@ private slots:
     void setThumbsViewerWindowTitle();
 
     void rename();
+    
+    void renameRate(bool front);
+    void renameFront();
+    void renameBack();
 
     void removeMetadata();
 
@@ -301,7 +305,11 @@ private:
     QAction *deletePermanentlyAction;
     QAction *saveAction;
     QAction *saveAsAction;
+
     QAction *renameAction;
+    QAction *renameFrontAction;
+    QAction *renameBackAction;
+
     QAction *removeMetadataAction;
     QAction *selectAllAction;
     QAction *copyImageAction;
