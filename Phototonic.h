@@ -102,9 +102,11 @@ private slots:
 
     void rename();
     
-    void renameRate(bool front);
+    void renameRate(bool front, bool del);
     void renameFront();
+    void renameFrontDel();
     void renameBack();
+    void renameBackDel();
 
     void removeMetadata();
 
@@ -309,6 +311,8 @@ private:
     QAction *renameAction;
     QAction *renameFrontAction;
     QAction *renameBackAction;
+    QAction *renameFrontDelAction;
+    QAction *renameBackDelAction;
 
     QAction *removeMetadataAction;
     QAction *selectAllAction;
