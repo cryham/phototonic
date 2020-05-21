@@ -25,8 +25,10 @@
 #include "ColorsDialog.h"
 #include "ExternalAppsDialog.h"
 #include "ProgressDialog.h"
+#include "RangeInputDialog.h"
 #include "ImagePreview.h"
 #include "FileListWidget.h"
+#include "GuideWidget.h"
 #include "RenameDialog.h"
 #include "Trashcan.h"
 #include "MessageBox.h"
@@ -160,7 +162,7 @@ void Phototonic::createImageViewer() {
     connect(saveAsAction, SIGNAL(triggered()), imageViewer, SLOT(saveImageAs()));
     connect(copyImageAction, SIGNAL(triggered()), imageViewer, SLOT(copyImage()));
     connect(pasteImageAction, SIGNAL(triggered()), imageViewer, SLOT(pasteImage()));
-    connect(cropToSelectionAction, SIGNAL(triggered()), imageViewer, SLOT(cropToSelection()));
+    connect(applyCropAndRotationAction, SIGNAL(triggered()), imageViewer, SLOT(applyCropAndRotation()));
     imageViewer->ImagePopUpMenu = new QMenu();
 
     // Widget actions
@@ -181,7 +183,7 @@ void Phototonic::createImageViewer() {
     imageViewer->addAction(flipHorizontalAction);
     imageViewer->addAction(flipVerticalAction);
     imageViewer->addAction(cropAction);
-    imageViewer->addAction(cropToSelectionAction);
+    imageViewer->addAction(applyCropAndRotationAction);
     imageViewer->addAction(resizeAction);
     imageViewer->addAction(saveAction);
     imageViewer->addAction(saveAsAction);
@@ -252,11 +254,21 @@ void Phototonic::createImageViewer() {
     mirroringActionGroup->addAction(mirrorQuadAction);
     MirroringSubMenu->addActions(mirroringActionGroup->actions());
 
+    guideSubMenu = new QMenu(tr("Guides"));
+    guideSubMenuAction = new QAction(tr("Guides"), this);
+    guideSubMenuAction->setMenu(guideSubMenu);
+    guideAddVerticalAction = new QAction(tr("Add vertical guide"), this);
+    guideAddHorizontalAction = new QAction(tr("Add horizontal guide"), this);
+    guideSubMenu->addAction(guideAddVerticalAction);
+    guideSubMenu->addAction(guideAddHorizontalAction);
+    connect(guideAddVerticalAction, &QAction::triggered, this, &Phototonic::addVerticalGuide);
+    connect(guideAddHorizontalAction, &QAction::triggered, this, &Phototonic::addHorizontalGuide);
+
     transformSubMenu = new QMenu(tr("Transform"));
     transformSubMenuAction = new QAction(tr("Transform"), this);
     transformSubMenuAction->setMenu(transformSubMenu);
     imageViewer->ImagePopUpMenu->addAction(resizeAction);
-    imageViewer->ImagePopUpMenu->addAction(cropToSelectionAction);
+    imageViewer->ImagePopUpMenu->addAction(applyCropAndRotationAction);
     imageViewer->ImagePopUpMenu->addAction(transformSubMenuAction);
     transformSubMenu->addAction(colorsAction);
     transformSubMenu->addAction(rotateRightAction);
@@ -270,6 +282,7 @@ void Phototonic::createImageViewer() {
     addMenuSeparator(transformSubMenu);
     transformSubMenu->addAction(keepTransformAction);
     imageViewer->ImagePopUpMenu->addAction(mirrorSubMenuAction);
+    imageViewer->ImagePopUpMenu->addAction(guideSubMenuAction);
 
     addMenuSeparator(imageViewer->ImagePopUpMenu);
     imageViewer->ImagePopUpMenu->addAction(copyToAction);
@@ -366,6 +379,18 @@ void Phototonic::createActions() {
     connect(copyAction, SIGNAL(triggered()), this, SLOT(copyThumbs()));
     copyAction->setEnabled(false);
 
+    setClassicThumbsAction = new QAction(tr("Show classic thumbnails"), this);
+    setClassicThumbsAction->setCheckable(true);
+    setClassicThumbsAction->setChecked(Settings::thumbsLayout == ThumbsViewer::Classic);
+    setClassicThumbsAction->setObjectName("setClassicThumbs");
+    connect(setClassicThumbsAction, SIGNAL(triggered()), this, SLOT(setClassicThumbs()));
+
+    setSquareThumbsAction = new QAction(tr("Show square thumbnails"), this);
+    setSquareThumbsAction->setCheckable(true);
+    setSquareThumbsAction->setChecked(Settings::thumbsLayout == ThumbsViewer::Squares);
+    setSquareThumbsAction->setObjectName("setSquareThumbs");
+    connect(setSquareThumbsAction, SIGNAL(triggered()), this, SLOT(setSquareThumbs()));
+
     copyToAction = new QAction(tr("Copy to..."), this);
     copyToAction->setObjectName("copyTo");
     connect(copyToAction, SIGNAL(triggered()), this, SLOT(copyImagesTo()));
@@ -424,6 +449,10 @@ void Phototonic::createActions() {
     selectAllAction = new QAction(tr("Select All"), this);
     selectAllAction->setObjectName("selectAll");
     connect(selectAllAction, SIGNAL(triggered()), this, SLOT(selectAllThumbs()));
+
+    selectByBrightnesAction = new QAction(tr("Select by Brightness"), this);
+    selectByBrightnesAction->setObjectName("selectByBrightness");
+    connect(selectByBrightnesAction, SIGNAL(triggered()), this, SLOT(selectByBrightness()));
 
     aboutAction = new QAction(tr("About"), this);
     aboutAction->setObjectName("about");
@@ -507,6 +536,11 @@ void Phototonic::createActions() {
     createDirectoryAction->setObjectName("createDir");
     connect(createDirectoryAction, SIGNAL(triggered()), this, SLOT(createSubDirectory()));
     createDirectoryAction->setIcon(QIcon::fromTheme("folder-new", QIcon(":/images/new_folder.png")));
+
+    setSaveDirectoryAction = new QAction(tr("Set Save Directory"), this);
+    setSaveDirectoryAction->setObjectName("setSaveDir");
+    connect(setSaveDirectoryAction, SIGNAL(triggered()), this, SLOT(setSaveDirectory()));
+    setSaveDirectoryAction->setIcon(QIcon::fromTheme("folder-visiting", QIcon(":/images/folder-visiting.png")));
 
     goBackAction = new QAction(tr("Back"), this);
     goBackAction->setObjectName("goBack");
@@ -637,9 +671,9 @@ void Phototonic::createActions() {
     cropAction->setIcon(QIcon(":/images/crop.png"));
     connect(cropAction, SIGNAL(triggered()), this, SLOT(cropImage()));
 
-    cropToSelectionAction = new QAction(tr("Crop to Selection"), this);
-    cropToSelectionAction->setObjectName("cropToSelection");
-    cropToSelectionAction->setIcon(QIcon(":/images/crop.png"));
+    applyCropAndRotationAction = new QAction(tr("Apply Crop and Rotation"), this);
+    applyCropAndRotationAction->setObjectName("applyCropAndRotation");
+    applyCropAndRotationAction->setIcon(QIcon(":/images/crop.png"));
 
     resizeAction = new QAction(tr("Scale Image"), this);
     resizeAction->setObjectName("resize");
@@ -658,6 +692,12 @@ void Phototonic::createActions() {
     colorsAction->setObjectName("colors");
     connect(colorsAction, SIGNAL(triggered()), this, SLOT(showColorsDialog()));
     colorsAction->setIcon(QIcon(":/images/colors.png"));
+
+    findDupesAction = new QAction(tr("Find Duplicate Images"), this);
+    findDupesAction->setObjectName("findDupes");
+    findDupesAction->setIcon(QIcon(":/images/duplicates.png"));
+    findDupesAction->setCheckable(true);
+    connect(findDupesAction, SIGNAL(triggered()), this, SLOT(findDuplicateImages()));
 
     mirrorDisabledAction = new QAction(tr("Disable Mirror"), this);
     mirrorDisabledAction->setObjectName("mirrorDisabled");
@@ -704,6 +744,15 @@ void Phototonic::createActions() {
     invertSelectionAction->setObjectName("invertSelection");
     connect(invertSelectionAction, SIGNAL(triggered()), thumbsViewer, SLOT(invertSelection()));
 
+    // There could be a Batch submenu if we had any more items to put there
+    batchSubMenu = new QMenu(tr("Batch"));
+    batchSubMenuAction = new QAction(tr("Batch"), this);
+    batchSubMenuAction->setMenu(batchSubMenu);
+    batchTransformAction = new QAction(tr("Repeat Rotate and Crop"), this);
+    batchTransformAction->setObjectName("batchTransform");
+    connect(batchTransformAction, SIGNAL(triggered()), this, SLOT(batchTransform()));
+    batchSubMenu->addAction(batchTransformAction);
+
     filterImagesFocusAction = new QAction(tr("Filter by Name"), this);
     filterImagesFocusAction->setObjectName("filterImagesFocus");
     connect(filterImagesFocusAction, SIGNAL(triggered()), this, SLOT(filterImagesFocus()));
@@ -716,6 +765,7 @@ void Phototonic::createMenus() {
     fileMenu = menuBar()->addMenu(tr("&File"));
     fileMenu->addAction(includeSubDirectoriesAction);
     fileMenu->addAction(createDirectoryAction);
+    fileMenu->addAction(setSaveDirectoryAction);
     fileMenu->addAction(showClipboardAction);
     fileMenu->addAction(addBookmarkAction);
     fileMenu->addSeparator();
@@ -737,7 +787,9 @@ void Phototonic::createMenus() {
     editMenu->addAction(deletePermanentlyAction);
     editMenu->addSeparator();
     editMenu->addAction(selectAllAction);
+    editMenu->addAction(selectByBrightnesAction);
     editMenu->addAction(invertSelectionAction);
+    editMenu->addAction(batchSubMenuAction);
     addAction(filterImagesFocusAction);
     addAction(setPathFocusAction);
     editMenu->addSeparator();
@@ -760,6 +812,12 @@ void Phototonic::createMenus() {
     viewMenu->addAction(slideShowAction);
     viewMenu->addSeparator();
 
+    thumbLayoutsGroup = new QActionGroup(this);
+    thumbLayoutsGroup->addAction(setClassicThumbsAction);
+    thumbLayoutsGroup->addAction(setSquareThumbsAction);
+    viewMenu->addActions(thumbLayoutsGroup->actions());
+    viewMenu->addSeparator();
+
     viewMenu->addAction(thumbsZoomInAction);
     viewMenu->addAction(thumbsZoomOutAction);
     sortMenu = viewMenu->addMenu(tr("Thumbnails Sorting"));
@@ -776,6 +834,9 @@ void Phototonic::createMenus() {
     viewMenu->addAction(showHiddenFilesAction);
     viewMenu->addSeparator();
     viewMenu->addAction(refreshAction);
+    viewMenu->addSeparator();
+
+    viewMenu->addAction(findDupesAction);
 
     // thumbs viewer context menu
     thumbsViewer->addAction(viewImageAction);
@@ -796,7 +857,9 @@ void Phototonic::createMenus() {
     thumbsViewer->addAction(deletePermanentlyAction);
     addMenuSeparator(thumbsViewer);
     thumbsViewer->addAction(selectAllAction);
+    thumbsViewer->addAction(selectByBrightnesAction);
     thumbsViewer->addAction(invertSelectionAction);
+    thumbsViewer->addAction(batchSubMenuAction);
     thumbsViewer->setContextMenuPolicy(Qt::ActionsContextMenu);
     menuBar()->setVisible(true);
 }
@@ -830,6 +893,7 @@ void Phototonic::createToolBars() {
     connect(pathLineEdit, SIGNAL(returnPressed()), this, SLOT(goPathBarDir()));
     goToolBar->addWidget(pathLineEdit);
     goToolBar->addAction(includeSubDirectoriesAction);
+    goToolBar->addAction(findDupesAction);
     connect(goToolBar->toggleViewAction(), SIGNAL(triggered()), this, SLOT(setGoToolBarVisibility()));
 
     /* View */
@@ -887,6 +951,16 @@ void Phototonic::createToolBars() {
     connect(imageToolBar->toggleViewAction(), SIGNAL(triggered()), this, SLOT(setImageToolBarVisibility()));
 
     setToolbarIconSize();
+}
+
+void Phototonic::setClassicThumbs() {
+    Settings::thumbsLayout = ThumbsViewer::Classic;
+    refreshThumbs(false);
+}
+
+void Phototonic::setSquareThumbs() {
+    Settings::thumbsLayout = ThumbsViewer::Squares;
+    refreshThumbs(false);
 }
 
 void Phototonic::setToolbarIconSize() {
@@ -1036,6 +1110,7 @@ void Phototonic::sortThumbnails() {
 }
 
 void Phototonic::reload() {
+    findDupesAction->setChecked(false);
     if (Settings::layoutMode == ThumbViewWidget) {
         refreshThumbs(false);
     } else {
@@ -1044,6 +1119,7 @@ void Phototonic::reload() {
 }
 
 void Phototonic::setIncludeSubDirs() {
+    findDupesAction->setChecked(false);
     Settings::includeSubDirectories = includeSubDirectoriesAction->isChecked();
     refreshThumbs(false);
 }
@@ -1250,6 +1326,15 @@ void Phototonic::toggleFullScreen() {
 
 void Phototonic::selectAllThumbs() {
     thumbsViewer->selectAll();
+}
+
+void Phototonic::selectByBrightness() {
+    RangeInputDialog dlg(this);
+    if (dlg.exec()) {
+        qreal min = dlg.minimumValue();
+        qreal max = dlg.maximumValue();
+        thumbsViewer->selectByBrightness(min, max);
+    }
 }
 
 void Phototonic::copyOrCutThumbs(bool isCopyOperation) {
@@ -1463,6 +1548,20 @@ void Phototonic::flipHorizontal() {
     imageViewer->setFeedback(Settings::flipH ? tr("Flipped Horizontally") : tr("Unflipped Horizontally"));
 }
 
+void Phototonic::addVerticalGuide()
+{
+    GuideWidget *g = new GuideWidget(imageViewer, true);
+    g->move(imageViewer->getContextMenuPosition().x() - GuideWidget::halfThickness(), 0);
+    g->show();
+}
+
+void Phototonic::addHorizontalGuide()
+{
+    GuideWidget *g = new GuideWidget(imageViewer, false);
+    g->move(0, imageViewer->getContextMenuPosition().y() - GuideWidget::halfThickness());
+    g->show();
+}
+
 void Phototonic::cropImage() {
     if (Settings::slideShowActive) {
         toggleSlideShow();
@@ -1511,6 +1610,39 @@ void Phototonic::freeRotateRight() {
         Settings::rotation = 1;
     imageViewer->refresh();
     imageViewer->setFeedback(tr("Rotation %1°").arg(QString::number(Settings::rotation)));
+}
+
+void Phototonic::batchTransform() {
+    QModelIndexList idxs = thumbsViewer->selectionModel()->selectedIndexes();
+    MessageBox msgBox(this);
+    if (idxs.count() < 1) {
+        msgBox.critical(tr("No images selected"), tr("Please select the images to transform."));
+        return;
+    }
+    QString saveMessage = tr("overwiting the original files");
+    if (!Settings::saveDirectory.isEmpty())
+        saveMessage = tr("saving the transformed images to %1").arg(Settings::saveDirectory);
+    QString message(tr("Rotate %1 images by %2 degrees, then crop them to %3, %4 %5 x %6, %7?")
+                    .arg(idxs.count()).arg(Settings::rotation, 0, 'f', 2)
+                    .arg(Settings::cropLeft).arg(Settings::cropTop).arg(Settings::cropWidth).arg(Settings::cropHeight)
+                    .arg(saveMessage));
+    msgBox.setText(tr("Perform batch transformation?"));
+    msgBox.setInformativeText(message);
+    msgBox.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
+    msgBox.setDefaultButton(QMessageBox::Ok);
+    if (msgBox.exec() == QMessageBox::Ok) {
+        bool keepTransformWas = Settings::keepTransform;
+        imageViewer->batchMode = true;
+        Settings::keepTransform = true;
+        for (QModelIndex i : idxs) {
+            qDebug() << thumbsViewer->model()->data(i, ThumbsViewer::FileNameRole);
+            loadSelectedThumbImage(i);
+            imageViewer->applyCropAndRotation();
+            imageViewer->saveImage();
+        }
+        Settings::keepTransform = keepTransformWas;
+        imageViewer->batchMode = false;
+    }
 }
 
 void Phototonic::showColorsDialog() {
@@ -1705,8 +1837,18 @@ void Phototonic::deleteImages(bool trash) {
         }
     }
 
+    // To only show progress dialog if deleting actually takes time
+    QElapsedTimer timer;
+    timer.start();
+
+    // Avoid a lot of not interesting updates while deleting
+    QSignalBlocker fsBlocker(fileSystemTree->fileSystemModel);
+    QSignalBlocker scrollbarBlocker(thumbsViewer->verticalScrollBar());
+
+    // Avoid reloading thumbnails all the time
+    thumbsViewer->isBusy = true;
+
     ProgressDialog *progressDialog = new ProgressDialog(this);
-    progressDialog->show();
 
     int deleteFilesCount = 0;
     bool deleteOk;
@@ -1716,7 +1858,14 @@ void Phototonic::deleteImages(bool trash) {
     while ((indexesList = thumbsViewer->selectionModel()->selectedIndexes()).size()) {
         QString fileNameFullPath = thumbsViewer->thumbsViewerModel->item(
                 indexesList.first().row())->data(thumbsViewer->FileNameRole).toString();
-        progressDialog->opLabel->setText("Deleting " + fileNameFullPath);
+
+        // Only show if it takes a lot of time, since popping this up for just
+        // deleting a single image is annoying
+        if (timer.elapsed() > 100) {
+            progressDialog->opLabel->setText("Deleting " + fileNameFullPath);
+            progressDialog->show();
+        }
+
         QString deleteError;
         if (trash) {
             deleteOk = Trash::moveToTrash(fileNameFullPath, deleteError) == Trash::Success;
@@ -1749,7 +1898,7 @@ void Phototonic::deleteImages(bool trash) {
     }
 
     if (thumbsViewer->thumbsViewerModel->rowCount() && rows.count()) {
-        qSort(rows.begin(), rows.end());
+        std::sort(rows.begin(), rows.end());
         row = rows.at(0);
 
         if (row >= thumbsViewer->thumbsViewerModel->rowCount()) {
@@ -1765,6 +1914,8 @@ void Phototonic::deleteImages(bool trash) {
 
     QString state = QString(tr("Deleted") + " " + tr("%n image(s)", "", deleteFilesCount));
     setStatus(state);
+
+    thumbsViewer->isBusy = false;
 }
 
 void Phototonic::deleteFromViewer(bool trash) {
@@ -1863,6 +2014,7 @@ void Phototonic::deletePermanentlyOperation() {
 }
 
 void Phototonic::goTo(QString path) {
+    findDupesAction->setChecked(false);
     Settings::isFileListLoaded = false;
     fileListWidget->clearSelection();
     thumbsViewer->setNeedToScroll(true);
@@ -1872,6 +2024,7 @@ void Phototonic::goTo(QString path) {
 }
 
 void Phototonic::goSelectedDir(const QModelIndex &idx) {
+    findDupesAction->setChecked(false);
     Settings::isFileListLoaded = false;
     fileListWidget->clearSelection();
     thumbsViewer->setNeedToScroll(true);
@@ -1881,6 +2034,7 @@ void Phototonic::goSelectedDir(const QModelIndex &idx) {
 }
 
 void Phototonic::goPathBarDir() {
+    findDupesAction->setChecked(false);
     thumbsViewer->setNeedToScroll(true);
 
     QDir checkPath(pathLineEdit->text());
@@ -1990,6 +2144,7 @@ void Phototonic::writeSettings() {
     Settings::appSettings->setValue(Settings::optionThumbsBackgroundColor, Settings::thumbsBackgroundColor);
     Settings::appSettings->setValue(Settings::optionThumbsTextColor, Settings::thumbsTextColor);
     Settings::appSettings->setValue(Settings::optionThumbsPagesReadCount, (int) Settings::thumbsPagesReadCount);
+    Settings::appSettings->setValue(Settings::optionThumbsLayout, (int) Settings::thumbsLayout);
     Settings::appSettings->setValue(Settings::optionEnableAnimations, (bool) Settings::enableAnimations);
     Settings::appSettings->setValue(Settings::optionExifRotationEnabled, (bool) Settings::exifRotationEnabled);
     Settings::appSettings->setValue(Settings::optionExifThumbRotationEnabled,
@@ -2077,6 +2232,7 @@ void Phototonic::readSettings() {
         Settings::appSettings->setValue(Settings::optionThumbsBackgroundColor, QColor(200, 200, 200));
         Settings::appSettings->setValue(Settings::optionThumbsTextColor, QColor(25, 25, 25));
         Settings::appSettings->setValue(Settings::optionThumbsPagesReadCount, (int) 2);
+        Settings::appSettings->setValue(Settings::optionThumbsLayout, (int) ThumbsViewer::Classic);
         Settings::appSettings->setValue(Settings::optionViewerZoomOutFlags, (int) 1);
         Settings::appSettings->setValue(Settings::optionViewerZoomInFlags, (int) 0);
         Settings::appSettings->setValue(Settings::optionWrapImageList, (bool) false);
@@ -2117,6 +2273,8 @@ void Phototonic::readSettings() {
     Settings::exifRotationEnabled = Settings::appSettings->value(Settings::optionExifRotationEnabled).toBool();
     Settings::exifThumbRotationEnabled = Settings::appSettings->value(
             Settings::optionExifThumbRotationEnabled).toBool();
+    Settings::thumbsLayout = Settings::appSettings->value(
+            Settings::optionThumbsLayout).toInt();
     Settings::reverseMouseBehavior = Settings::appSettings->value(Settings::optionReverseMouseBehavior).toBool();
     Settings::deleteConfirm = Settings::appSettings->value(Settings::optionDeleteConfirm).toBool();
     Settings::showHiddenFiles = Settings::appSettings->value(Settings::optionShowHiddenFiles).toBool();
@@ -2276,7 +2434,7 @@ void Phototonic::loadShortcuts() {
     Settings::actionKeys[flipHorizontalAction->objectName()] = flipHorizontalAction;
     Settings::actionKeys[flipVerticalAction->objectName()] = flipVerticalAction;
     Settings::actionKeys[cropAction->objectName()] = cropAction;
-    Settings::actionKeys[cropToSelectionAction->objectName()] = cropToSelectionAction;
+    Settings::actionKeys[applyCropAndRotationAction->objectName()] = applyCropAndRotationAction;
     Settings::actionKeys[colorsAction->objectName()] = colorsAction;
     Settings::actionKeys[mirrorDisabledAction->objectName()] = mirrorDisabledAction;
     Settings::actionKeys[mirrorDualAction->objectName()] = mirrorDualAction;
@@ -2371,7 +2529,7 @@ void Phototonic::loadShortcuts() {
         flipHorizontalAction->setShortcut(QKeySequence("Ctrl+Down"));
         flipVerticalAction->setShortcut(QKeySequence("Ctrl+Up"));
         cropAction->setShortcut(QKeySequence("Ctrl+G"));
-        cropToSelectionAction->setShortcut(QKeySequence("Ctrl+R"));
+        applyCropAndRotationAction->setShortcut(QKeySequence("Ctrl+R"));
         colorsAction->setShortcut(QKeySequence("Ctrl+O"));
         mirrorDisabledAction->setShortcut(QKeySequence("Ctrl+1"));
         mirrorDualAction->setShortcut(QKeySequence("Ctrl+2"));
@@ -2809,6 +2967,8 @@ void Phototonic::loadRandomImage() {
 }
 
 void Phototonic::setViewerKeyEventsEnabled(bool enabled) {
+    nextImageAction->setEnabled(enabled);
+    prevImageAction->setEnabled(enabled);
     moveLeftAction->setEnabled(enabled);
     moveRightAction->setEnabled(enabled);
     moveUpAction->setEnabled(enabled);
@@ -2848,9 +3008,7 @@ void Phototonic::hideViewer() {
 
     setThumbsViewerWindowTitle();
 
-    for (int i = 0; i <= 10 && qApp->hasPendingEvents(); ++i) {
-        QApplication::processEvents();
-    }
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 
     if (needThumbsRefresh) {
         needThumbsRefresh = false;
@@ -3041,12 +3199,18 @@ void Phototonic::onReloadThumbs() {
         setThumbsViewerWindowTitle();
     }
 
-    thumbsViewer->reLoad();
+    if (findDupesAction->isChecked()) {
+        thumbsViewer->loadDuplicates();
+    } else {
+        thumbsViewer->reLoad();
+    }
 }
 
 void Phototonic::setThumbsViewerWindowTitle() {
 
-    if (Settings::isFileListLoaded) {
+    if (findDupesAction->isChecked()) {
+        setWindowTitle(tr("Duplicate images in %1").arg(Settings::currentDirectory) + " - Phototonic");
+    } else if (Settings::isFileListLoaded) {
         setWindowTitle(tr("Files List") + " - Phototonic");
     } else {
         setWindowTitle(Settings::currentDirectory + " - Phototonic");
@@ -3284,8 +3448,7 @@ void Phototonic::removeMetadata() {
             }
         }
 
-        QItemSelection dummy;
-        thumbsViewer->onSelectionChanged(dummy);
+        thumbsViewer->onSelectionChanged();
         QString state = QString(tr("Metadata removed from selected images"));
         setStatus(state);
     }
@@ -3374,6 +3537,13 @@ void Phototonic::createSubDirectory() {
 
     setStatus(tr("Created %1").arg(newDirName));
     fileSystemTree->expand(selectedDirs[0]);
+}
+
+void Phototonic::setSaveDirectory(QString path) {
+    Settings::saveDirectory = path.isEmpty() ?
+        QFileDialog::getExistingDirectory(this, tr("Directory to save images into:"),
+            QString(), QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks) :
+        path;
 }
 
 QString Phototonic::getSelectedPath() {
@@ -3502,4 +3672,9 @@ void Phototonic::addNewBookmark() {
 void Phototonic::addBookmark(QString path) {
     Settings::bookmarkPaths.insert(path);
     bookmarks->reloadBookmarks();
+}
+
+void Phototonic::findDuplicateImages()
+{
+    refreshThumbs(true);
 }

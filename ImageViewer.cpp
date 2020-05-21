@@ -25,14 +25,46 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+namespace { // anonymous, not visible outside of this file
+Q_DECLARE_LOGGING_CATEGORY(PHOTOTONIC_EXIV2_LOG)
+Q_LOGGING_CATEGORY(PHOTOTONIC_EXIV2_LOG, "phototonic.exif", QtCriticalMsg)
+
+struct Exiv2LogHandler {
+    static void handleMessage(int level, const char *message) {
+        switch(level) {
+            case Exiv2::LogMsg::debug:
+                qCDebug(PHOTOTONIC_EXIV2_LOG) << message;
+                break;
+            case Exiv2::LogMsg::info:
+                qCInfo(PHOTOTONIC_EXIV2_LOG) << message;
+                break;
+            case Exiv2::LogMsg::warn:
+            case Exiv2::LogMsg::error:
+            case Exiv2::LogMsg::mute:
+                qCWarning(PHOTOTONIC_EXIV2_LOG) << message;
+                break;
+            default:
+                qCWarning(PHOTOTONIC_EXIV2_LOG) << "unhandled log level" << level << message;
+                break;
+        }
+    }
+
+    Exiv2LogHandler() {
+        Exiv2::LogMsg::setHandler(&Exiv2LogHandler::handleMessage);
+    }
+};
+}
+
 ImageViewer::ImageViewer(QWidget *parent, MetadataCache *metadataCache) : QWidget(parent) {
+    // This is a threadsafe way to ensure that we only register it once
+    static Exiv2LogHandler handler;
+
     this->phototonic = (Phototonic *) parent;
     this->metadataCache = metadataCache;
     cursorIsHidden = false;
     moveImageLocked = false;
     mirrorLayout = LayNone;
-    imageLabel = new QLabel;
-    imageLabel->setScaledContents(true);
+    imageWidget = new ImageWidget;
     isAnimation = false;
     animation = nullptr;
 
@@ -44,8 +76,8 @@ ImageViewer::ImageViewer(QWidget *parent, MetadataCache *metadataCache) : QWidge
     scrollArea->verticalScrollBar()->blockSignals(true);
     scrollArea->horizontalScrollBar()->blockSignals(true);
     scrollArea->setFrameStyle(0);
-    scrollArea->setWidget(imageLabel);
-    scrollArea->setWidgetResizable(true);
+    scrollArea->setWidget(imageWidget);
+    scrollArea->setWidgetResizable(false);
     setBackgroundColor();
 
     QVBoxLayout *scrollLayout = new QVBoxLayout;
@@ -112,14 +144,14 @@ static inline int calcZoom(int size) {
 
 void ImageViewer::resizeImage() {
     static bool busy = false;
-    if (busy || (!imageLabel->pixmap() && !animation)) {
+    if (busy || (imageWidget->empty() && !animation)) {
         return;
     }
     busy = true;
 
     int imageViewWidth = this->size().width();
     int imageViewHeight = this->size().height();
-    QSize imageSize = isAnimation ? animation->currentPixmap().size() : imageLabel->pixmap()->size();
+    QSize imageSize = isAnimation ? animation->currentPixmap().size() : imageWidget->imageSize();
 
     if (tempDisableResize) {
         imageSize.scale(imageSize.width(), imageSize.height(), Qt::KeepAspectRatio);
@@ -223,8 +255,8 @@ void ImageViewer::resizeImage() {
         }
     }
 
-    imageLabel->setFixedSize(imageSize);
-    imageLabel->adjustSize();
+    imageWidget->setFixedSize(imageSize);
+    imageWidget->adjustSize();
     centerImage(imageSize);
     busy = false;
 }
@@ -240,12 +272,7 @@ void ImageViewer::showEvent(QShowEvent *event) {
 }
 
 void ImageViewer::centerImage(QSize &imgSize) {
-    int newX = (this->size().width() - imgSize.width()) / 2;
-    int newY = (this->size().height() - imgSize.height()) / 2;
-
-    if (newX != imageLabel->pos().x() || newY != imageLabel->pos().y()) {
-        imageLabel->move(newX, newY);
-    }
+    scrollArea->ensureVisible(imgSize.width()/2, imgSize.height()/2, width()/2, height()/2);
 }
 
 void ImageViewer::rotateByExifRotation(QImage &image, QString &imageFullPath) {
@@ -293,7 +320,7 @@ void ImageViewer::transform() {
         rotateByExifRotation(viewerImage, viewerImageFullPath);
     }
 
-    if (Settings::rotation) {
+    if (!qFuzzyCompare(Settings::rotation, 0)) {
         QTransform trans;
         trans.rotate(Settings::rotation);
         viewerImage = viewerImage.transformed(trans, Qt::SmoothTransformation);
@@ -570,8 +597,7 @@ void ImageViewer::refresh() {
         mirror();
     }
 
-    viewerPixmap = QPixmap::fromImage(viewerImage);
-    imageLabel->setPixmap(viewerPixmap);
+    imageWidget->setImage(viewerImage);
     resizeImage();
 }
 
@@ -614,20 +640,25 @@ void ImageViewer::reload() {
         Settings::flipH = Settings::flipV = false;
     }
     Settings::scaledWidth = Settings::scaledHeight = 0;
-    Settings::cropLeft = Settings::cropTop = Settings::cropWidth = Settings::cropHeight = 0;
-
-    if (newImage || viewerImageFullPath.isEmpty()) {
-        newImage = true;
-        viewerImageFullPath = CLIPBOARD_IMAGE_NAME;
-        origImage.load(":/images/no_image.png");
-        viewerImage = origImage;
-        viewerPixmap = QPixmap::fromImage(viewerImage);
-        imageLabel->setPixmap(viewerPixmap);
-        pasteImage();
-        return;
+    if (!batchMode) {
+        if (!Settings::keepTransform)
+            Settings::cropLeft = Settings::cropTop = Settings::cropWidth = Settings::cropHeight = 0;
+        if (newImage || viewerImageFullPath.isEmpty()) {
+            newImage = true;
+            viewerImageFullPath = CLIPBOARD_IMAGE_NAME;
+            origImage.load(":/images/no_image.png");
+            viewerImage = origImage;
+            imageWidget->setImage(viewerImage);
+            pasteImage();
+            return;
+        }
     }
 
     QImageReader imageReader(viewerImageFullPath);
+    if (batchMode && imageReader.supportsAnimation()) {
+        qWarning() << tr("skipping animation in batch mode:") << viewerImageFullPath;
+        return;
+    }
     if (Settings::enableAnimations && imageReader.supportsAnimation()) {
         if (animation) {
             delete animation;
@@ -636,34 +667,53 @@ void ImageViewer::reload() {
 
         if (animation->frameCount() > 1) {
             isAnimation = true;
-            imageLabel->setMovie(animation);
+            if (!movieWidget) {
+                movieWidget = new QLabel();
+                movieWidget->setScaledContents(true);
+                scrollArea->setWidget(movieWidget); // deletes imageWidget
+                imageWidget = nullptr;
+            }
+            movieWidget->setMovie(animation);
             animation->start();
             resizeImage();
             return;
         }
     }
 
+    // It's not a movie
+    if (movieWidget) {
+        delete movieWidget;
+        movieWidget = nullptr;
+        imageWidget = new ImageWidget;
+        scrollArea->setWidget(imageWidget);
+    }
+
     if (imageReader.size().isValid() && imageReader.read(&origImage)) {
         viewerImage = origImage;
-        transform();
         if (Settings::colorsActive || Settings::keepTransform) {
             colorize();
         }
         if (mirrorLayout) {
             mirror();
         }
-        viewerPixmap = QPixmap::fromImage(viewerImage);
     } else {
-        viewerPixmap = QIcon::fromTheme("image-missing",
-                                        QIcon(":/images/error_image.png")).pixmap(BAD_IMAGE_SIZE, BAD_IMAGE_SIZE);
+        viewerImage = QIcon::fromTheme("image-missing",
+                                        QIcon(":/images/error_image.png")).pixmap(BAD_IMAGE_SIZE, BAD_IMAGE_SIZE).toImage();
         setInfo(imageReader.errorString());
     }
 
-    imageLabel->setPixmap(viewerPixmap);
+    imageWidget->setImage(viewerImage);
     resizeImage();
+    if (Settings::keepTransform) {
+        if (Settings::cropLeft || Settings::cropTop || Settings::cropWidth || Settings::cropHeight)
+            cropRubberBand->show();
+        imageWidget->setRotation(Settings::rotation);
+    }
     if (Settings::setWindowIcon) {
-        phototonic->setWindowIcon(viewerPixmap.scaled(WINDOW_ICON_SIZE, WINDOW_ICON_SIZE,
-                                                      Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        QPixmap icon;
+        icon.convertFromImage(viewerImage.scaled(WINDOW_ICON_SIZE, WINDOW_ICON_SIZE,
+                                                 Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        phototonic->setWindowIcon(icon);
     }
 }
 
@@ -677,7 +727,9 @@ void ImageViewer::unsetFeedback() {
     feedbackLabel->setVisible(false);
 }
 
-void ImageViewer::setFeedback(QString feedbackString) {
+void ImageViewer::setFeedback(QString feedbackString, bool timeLimited) {
+    if (feedbackString.isEmpty())
+        return;
     feedbackLabel->setText(feedbackString);
     feedbackLabel->setVisible(true);
 
@@ -685,7 +737,8 @@ void ImageViewer::setFeedback(QString feedbackString) {
     feedbackLabel->move(10, margin);
 
     feedbackLabel->adjustSize();
-    QTimer::singleShot(3000, this, SLOT(unsetFeedback()));
+    if (timeLimited)
+        QTimer::singleShot(3000, this, SLOT(unsetFeedback()));
 }
 
 void ImageViewer::loadImage(QString imageFileName) {
@@ -704,8 +757,7 @@ void ImageViewer::loadImage(QString imageFileName) {
 void ImageViewer::clearImage() {
     origImage.load(":/images/no_image.png");
     viewerImage = origImage;
-    viewerPixmap = QPixmap::fromImage(viewerImage);
-    imageLabel->setPixmap(viewerPixmap);
+    imageWidget->setImage(viewerImage);
 }
 
 void ImageViewer::monitorCursorState() {
@@ -750,6 +802,8 @@ void ImageViewer::mousePressEvent(QMouseEvent *event) {
             cropOrigin = event->pos();
             if (!cropRubberBand) {
                 cropRubberBand = new CropRubberBand(this);
+                connect(cropRubberBand, &CropRubberBand::selectionChanged,
+                        this, &ImageViewer::updateRubberBandFeedback);
             }
             cropRubberBand->show();
             cropRubberBand->setGeometry(QRect(cropOrigin, event->pos()).normalized());
@@ -758,7 +812,7 @@ void ImageViewer::mousePressEvent(QMouseEvent *event) {
                 cropRubberBand->hide();
             }
         }
-
+        initialRotation = imageWidget->rotation();
         setMouseMoveData(true, event->x(), event->y());
         QApplication::setOverrideCursor(Qt::ClosedHandCursor);
         event->accept();
@@ -772,61 +826,63 @@ void ImageViewer::mouseReleaseEvent(QMouseEvent *event) {
         while (QApplication::overrideCursor()) {
             QApplication::restoreOverrideCursor();
         }
-
-        if (cropRubberBand && cropRubberBand->isVisible()) {
-            setFeedback(tr("Selection size: ")
-                        + QString::number(cropRubberBand->width())
-                        + "x"
-                        + QString::number(cropRubberBand->height()));
-        }
     }
 
     QWidget::mouseReleaseEvent(event);
 }
 
-void ImageViewer::cropToSelection() {
+void ImageViewer::updateRubberBandFeedback(QRect geom) {
+    QPoint bandTopLeft = imageWidget->mapToImage(imageWidget->mapFromGlobal(mapToGlobal(cropRubberBand->geometry().topLeft())));
+
+    setFeedback(tr("Selection: ")
+                + QString::number(geom.width())
+                + "x"
+                + QString::number(geom.height())
+                + (bandTopLeft.x() < 0 ? "" : "+")
+                + QString::number(bandTopLeft.x())
+                + (bandTopLeft.y() < 0 ? "" : "+")
+                + QString::number(bandTopLeft.y()), false);
+}
+
+void ImageViewer::applyCropAndRotation() {
+    bool didSomething = false;
     if (cropRubberBand && cropRubberBand->isVisible()) {
 
         QPoint bandTopLeft = mapToGlobal(cropRubberBand->geometry().topLeft());
         QPoint bandBottomRight = mapToGlobal(cropRubberBand->geometry().bottomRight());
 
-        bandTopLeft = imageLabel->mapFromGlobal(bandTopLeft);
-        bandBottomRight = imageLabel->mapFromGlobal(bandBottomRight);
-
-        double scaledX = imageLabel->rect().width();
-        double scaledY = imageLabel->rect().height();
-        scaledX = viewerPixmap.width() / scaledX;
-        scaledY = viewerPixmap.height() / scaledY;
+        bandTopLeft = imageWidget->mapToImage(imageWidget->mapFromGlobal(bandTopLeft));
+        bandBottomRight = imageWidget->mapToImage(imageWidget->mapFromGlobal(bandBottomRight));
+        double scaledX = imageWidget->imageSize().width();
+        double scaledY = imageWidget->imageSize().height();
+        scaledX = viewerImage.width() / scaledX;
+        scaledY = viewerImage.height() / scaledY;
 
         bandTopLeft.setX(int(bandTopLeft.x() * scaledX));
         bandTopLeft.setY(int(bandTopLeft.y() * scaledY));
         bandBottomRight.setX(int(bandBottomRight.x() * scaledX));
         bandBottomRight.setY(int(bandBottomRight.y() * scaledY));
 
-        int cropLeft = bandTopLeft.x();
-        int cropTop = bandTopLeft.y();
-        int cropWidth = viewerPixmap.width() - bandBottomRight.x();
-        int cropHeight = viewerPixmap.height() - bandBottomRight.y();
-
-        if (cropLeft > 0) {
-            Settings::cropLeft += cropLeft;
-        }
-        if (cropTop > 0) {
-            Settings::cropTop += cropTop;
-        }
-        if (cropWidth > 0) {
-            Settings::cropWidth += cropWidth;
-        }
-        if (cropHeight > 0) {
-            Settings::cropHeight += cropHeight;
-        }
+        Settings::cropLeft = bandTopLeft.x();
+        Settings::cropTop = bandTopLeft.y();
+        Settings::cropWidth = viewerImage.width() - bandBottomRight.x();
+        Settings::cropHeight = viewerImage.height() - bandBottomRight.y();
+        Settings::rotation = imageWidget->rotation();
 
         cropRubberBand->hide();
         refresh();
-    } else {
+        didSomething = true;
+    }
+    if (!qFuzzyCompare(imageWidget->rotation(), 0)) {
+        refresh();
+        imageWidget->setRotation(0);
+        didSomething = true;
+    }
+    if (!didSomething) {
         MessageBox messageBox(this);
-        messageBox.warning(tr("No selection for cropping"),
-                           tr("To make a selection, hold down the Ctrl key and select a region using the mouse."));
+        messageBox.warning(tr("No selection for cropping, and no rotation"),
+                           tr("To make a selection, hold down the Ctrl key and select a region using the mouse. "
+                              "To rotate, hold down the Ctrl and Shift keys and drag the mouse near the right edge."));
     }
 }
 
@@ -834,8 +890,8 @@ void ImageViewer::setMouseMoveData(bool lockMove, int lMouseX, int lMouseY) {
     moveImageLocked = lockMove;
     mouseX = lMouseX;
     mouseY = lMouseY;
-    layoutX = imageLabel->pos().x();
-    layoutY = imageLabel->pos().y();
+    layoutX = imageWidget->pos().x();
+    layoutY = imageWidget->pos().y();
 }
 
 void ImageViewer::mouseMoveEvent(QMouseEvent *event) {
@@ -843,28 +899,35 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event) {
         if (cropRubberBand && cropRubberBand->isVisible()) {
             cropRubberBand->setGeometry(QRect(cropOrigin, event->pos()).normalized());
         }
+    } else if (event->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier)) {
+        QPointF fulcrum(QPointF(imageWidget->pos()) + QPointF(imageWidget->width() / 2.0, imageWidget->height() / 2.0));
+        if (event->pos().x() > (width() * 3) / 4)
+            fulcrum.setY(mouseY); // if the user pressed near the right edge, start with initial rotation of 0
+        QLineF vector(fulcrum, event->localPos());
+        imageWidget->setRotation(initialRotation - vector.angle());
+        // qDebug() << "image center" << fulcrum << "line" << vector << "angle" << vector.angle() << "geom" << imageWidget->geometry();
     } else {
         if (moveImageLocked) {
             int newX = layoutX + (event->pos().x() - mouseX);
             int newY = layoutY + (event->pos().y() - mouseY);
             bool needToMove = false;
 
-            if (imageLabel->size().width() > size().width()) {
+            if (imageWidget->size().width() > size().width()) {
                 if (newX > 0) {
                     newX = 0;
-                } else if (newX < (size().width() - imageLabel->size().width())) {
-                    newX = (size().width() - imageLabel->size().width());
+                } else if (newX < (size().width() - imageWidget->size().width())) {
+                    newX = (size().width() - imageWidget->size().width());
                 }
                 needToMove = true;
             } else {
                 newX = layoutX;
             }
 
-            if (imageLabel->size().height() > size().height()) {
+            if (imageWidget->size().height() > size().height()) {
                 if (newY > 0) {
                     newY = 0;
-                } else if (newY < (size().height() - imageLabel->size().height())) {
-                    newY = (size().height() - imageLabel->size().height());
+                } else if (newY < (size().height() - imageWidget->size().height())) {
+                    newY = (size().height() - imageWidget->size().height());
                 }
                 needToMove = true;
             } else {
@@ -872,15 +935,15 @@ void ImageViewer::mouseMoveEvent(QMouseEvent *event) {
             }
 
             if (needToMove) {
-                imageLabel->move(newX, newY);
+                imageWidget->move(newX, newY);
             }
         }
     }
 }
 
 void ImageViewer::keyMoveEvent(int direction) {
-    int newX = layoutX = imageLabel->pos().x();
-    int newY = layoutY = imageLabel->pos().y();
+    int newX = layoutX = imageWidget->pos().x();
+    int newY = layoutY = imageWidget->pos().y();
     bool needToMove = false;
 
     switch (direction) {
@@ -898,22 +961,22 @@ void ImageViewer::keyMoveEvent(int direction) {
             break;
     }
 
-    if (imageLabel->size().width() > size().width()) {
+    if (imageWidget->size().width() > size().width()) {
         if (newX > 0) {
             newX = 0;
-        } else if (newX < (size().width() - imageLabel->size().width())) {
-            newX = (size().width() - imageLabel->size().width());
+        } else if (newX < (size().width() - imageWidget->size().width())) {
+            newX = (size().width() - imageWidget->size().width());
         }
         needToMove = true;
     } else {
         newX = layoutX;
     }
 
-    if (imageLabel->size().height() > size().height()) {
+    if (imageWidget->size().height() > size().height()) {
         if (newY > 0) {
             newY = 0;
-        } else if (newY < (size().height() - imageLabel->size().height())) {
-            newY = (size().height() - imageLabel->size().height());
+        } else if (newY < (size().height() - imageWidget->size().height())) {
+            newY = (size().height() - imageWidget->size().height());
         }
         needToMove = true;
     } else {
@@ -925,20 +988,20 @@ void ImageViewer::keyMoveEvent(int direction) {
 
         switch (direction) {
             case MoveLeft:
-                for (i = imageLabel->pos().x(); i <= newX; ++i)
-                    imageLabel->move(newX, newY);
+                for (i = imageWidget->pos().x(); i <= newX; ++i)
+                    imageWidget->move(newX, newY);
                 break;
             case MoveRight:
-                for (i = imageLabel->pos().x(); i >= newX; --i)
-                    imageLabel->move(newX, newY);
+                for (i = imageWidget->pos().x(); i >= newX; --i)
+                    imageWidget->move(newX, newY);
                 break;
             case MoveUp:
-                for (i = imageLabel->pos().y(); i <= newY; ++i)
-                    imageLabel->move(newX, newY);
+                for (i = imageWidget->pos().y(); i <= newY; ++i)
+                    imageWidget->move(newX, newY);
                 break;
             case MoveDown:
-                for (i = imageLabel->pos().y(); i >= newY; --i)
-                    imageLabel->move(newX, newY);
+                for (i = imageWidget->pos().y(); i >= newY; --i)
+                    imageWidget->move(newX, newY);
                 break;
         }
     }
@@ -947,6 +1010,7 @@ void ImageViewer::keyMoveEvent(int direction) {
 void ImageViewer::saveImage() {
     Exiv2::Image::AutoPtr image;
     bool exifError = false;
+    static bool showExifError = true;
 
     if (newImage) {
         saveImageAs();
@@ -964,7 +1028,12 @@ void ImageViewer::saveImage() {
     }
 
     QImageReader imageReader(viewerImageFullPath);
-    if (!viewerPixmap.save(viewerImageFullPath, imageReader.format().toUpper(), Settings::defaultSaveQuality)) {
+    QString savePath = viewerImageFullPath;
+    if (!Settings::saveDirectory.isEmpty()) {
+        QDir saveDir(Settings::saveDirectory);
+        savePath = saveDir.filePath(QFileInfo(viewerImageFullPath).fileName());
+    }
+    if (!viewerImage.save(savePath, imageReader.format().toUpper(), Settings::defaultSaveQuality)) {
         MessageBox msgBox(this);
         msgBox.critical(tr("Error"), tr("Failed to save image."));
         return;
@@ -972,11 +1041,27 @@ void ImageViewer::saveImage() {
 
     if (!exifError) {
         try {
-            image->writeMetadata();
+            if (Settings::saveDirectory.isEmpty()) {
+                image->writeMetadata();
+            } else {
+                Exiv2::Image::AutoPtr imageOut = Exiv2::ImageFactory::open(savePath.toStdString());
+                imageOut->setMetadata(*image);
+                Exiv2::ExifThumb thumb(imageOut->exifData());
+                thumb.erase();
+                // TODO: thumb.setJpegThumbnail(thumbnailPath);
+                imageOut->writeMetadata();
+            }
         }
         catch (Exiv2::Error &error) {
-            MessageBox msgBox(this);
-            msgBox.critical(tr("Error"), tr("Failed to save Exif metadata."));
+            if (showExifError) {
+                MessageBox msgBox(this);
+                QCheckBox cb(tr("Don't show this message again"));
+                msgBox.setCheckBox(&cb);
+                msgBox.critical(tr("Error"), tr("Failed to save Exif metadata."));
+                showExifError = !(cb.isChecked());
+            } else {
+                qWarning() << tr("Failed to safe Exif metadata:") << error.what();
+            }
         }
     }
 
@@ -1007,7 +1092,7 @@ void ImageViewer::saveImageAs() {
         }
 
 
-        if (!viewerPixmap.save(fileName, 0, Settings::defaultSaveQuality)) {
+        if (!viewerImage.save(fileName, 0, Settings::defaultSaveQuality)) {
             MessageBox msgBox(this);
             msgBox.critical(tr("Error"), tr("Failed to save image."));
         } else {
@@ -1034,8 +1119,8 @@ void ImageViewer::contextMenuEvent(QContextMenuEvent *) {
     while (QApplication::overrideCursor()) {
         QApplication::restoreOverrideCursor();
     }
-
-    ImagePopUpMenu->exec(QCursor::pos());
+    contextMenuPosition = QCursor::pos() - window()->geometry().topLeft();
+    ImagePopUpMenu->exec(contextMenuPosition);
 }
 
 int ImageViewer::getImageWidthPreCropped() {
@@ -1077,5 +1162,9 @@ void ImageViewer::setBackgroundColor() {
 
     QString styleSheet = "QWidget { " + bgColor + " }";
     scrollArea->setStyleSheet(styleSheet);
+}
+
+QPoint ImageViewer::getContextMenuPosition() {
+    return contextMenuPosition;
 }
 
